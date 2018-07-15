@@ -240,6 +240,9 @@ boolean sendOldDataToServer() {
     if(savedData) {
       while(savedData.available()) {
         dataBulk = dataBulk + readlnSPIFFS(savedData);
+        if(savedData.available()) {
+          dataBulk = dataBulk + ',';
+        }
       }
     }
     savedData.close();
@@ -344,9 +347,6 @@ String readlnSPIFFS(fs::File file) {
   while(curr != '\0' and file.available()) {
     curr = file.read();
     res += curr;
-  }
-  if(file.available()) {
-    res += ',';
   }
   return res; 
 }
