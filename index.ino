@@ -21,15 +21,17 @@
 #define HTTP_OK 201
 #define SDCARD_PIN D8
 #define DHT_PIN D4
+#define MICROSEC 1000000
+#define MILLISEC 1000
+#define TIME_TO_WAIT 10000
 
-// Data for connecting to wi-fi and server
-const char* ssid     = "Keenetic-4928";
-const char* password = "PpJu9xPA";
+String dataHostTail = "/api/readouts/";
+String regHostTail  = "/api/devices/";
 
-String dataHost = "http://192.168.1.44:8000/api/readouts/";
-String regHost  = "http://192.168.1.44:8000/api/devices/";
+const char* ssid = "Innopolis";
+const char* password = "Innopolis";
 
-int sleeptime = 5000;
+int sleeptime = 5000000;
 int timezone = 3;
 
 // DHT sensor object
@@ -42,7 +44,10 @@ boolean wifiConnect() {
   int waited = 0;
 
   Serial.println("Connecting to wi-fi network");
+  Serial.println(WiFi.macAddress());
 
+  Serial.println(ssid);
+  Serial.println(password);
   // Start trying to connect to wi-fi
   WiFi.begin(ssid, password);
   yield();
@@ -67,21 +72,23 @@ boolean wifiConnect() {
 }
 
 void tryToRegister() {
+  String regHost = "http://" + readFromFile("ip.txt") + "/api/devices/";
 
-  Serial.println("Check registratoin");
+  Serial.println("Check registration");
+  Serial.println("URL is: " + regHost);
 
   SPIFFS.begin();
   if(!SPIFFS.exists("register.txt")) {
     Serial.println("Device is not registered");
 
     HTTPClient http;
+    String key = readFromFile("key.txt");
     //String key = getKey();
     String macAdd = WiFi.macAddress();
 
     http.begin(regHost); 
     http.addHeader("Content-Type", "application/json");
-    //String regData = "{\"key\": \"" + key + "\", \"MAC\": \"" + macAdd + "\", \"charge\": \"90\"}"; the correct one for production
-    String regData = "{\"key\": \"JASFGH\", \"MAC\": \"" + macAdd + "\", \"charge\": \"90\"}";
+    String regData = "{\"key\": \"" + key + "\", \"MAC\": \"" + macAdd + "\", \"charge\": \"90\"}"; 
     Serial.println(regData);
     int httpCode = http.POST(regData);
     Serial.println(httpCode);
@@ -93,13 +100,78 @@ void tryToRegister() {
 
     http.end();
 
-    //setTime();
-
   } else {
     Serial.println("Device is registered");
   }
 
   SPIFFS.end();
+}
+
+void serialCommands() {
+  int timeWaited = 0;
+  while(timeWaited < TIME_TO_WAIT) {
+      if(Serial.available() > 0) {
+        String inputCommand = readlnSerial();
+        Serial.println(inputCommand);
+        // Format data
+        if(inputCommand.equals("format")) {
+          formatData();
+        }
+        // Remove file register.txt with device id
+        if(inputCommand.equals("unregister")) {
+          SPIFFS.begin();
+          SPIFFS.remove("register.txt");
+          SPIFFS.end();
+          Serial.println("Registration removed");
+        }
+        // Enter the key to register
+        if(inputCommand.equals("key")) {
+          while(Serial.available() == 0) {
+            delay(500);
+          }
+          String key = readlnSerial();
+          writeInFile("key.txt", key, "w");    
+        }
+        // Enter WI-FI settings
+        if(inputCommand.equals("wifi")) {
+          while(Serial.available() == 0) {
+            delay(500);
+          }
+          String ssid = readlnSerial();
+          writeInFile("wifi_ssid.txt", ssid, "w");
+          while(Serial.available() == 0) {
+            delay(500);
+          }
+          String pass = readlnSerial();
+          writeInFile("wifi_password.txt", pass, "w");
+        }
+        // Enter ip address of server
+        if(inputCommand.equals("ip")) {
+          while(Serial.available() == 0) {
+            delay(500);
+          }
+          String ip = readlnSerial();
+          writeInFile("ip.txt", ip, "w");
+        } 
+        // Continue working
+        if(inputCommand.equals("next")) {
+          break;
+        }
+        timeWaited = 0;
+      } else {
+        timeWaited += 500;
+        delay(500);
+      }
+  }
+}
+
+// Converts string to const char* for using in wi-fi connection
+const char* stringToChar(String data) {
+  char* tmp = new char[data.length() + 1];
+  data.toCharArray(tmp, data.length() + 1);
+  Serial.println(data.length() + 1);
+  Serial.println(data);
+  return tmp;
 }
 
 int deserializeBody(String body) {
@@ -116,70 +188,75 @@ int deserializeBody(String body) {
       idChars = !idChars;
     }
   }
-  setID(id);
+  // Saving ID of the device
+  writeInFile("register.txt", id, "w");
+  //setID(id);
   return sleepTime.toInt();
 }
 
-void setID(String id) {
-  Serial.println("Setting device ID");
+void writeInFile(String fileName, String data, char* mode) {
+  Serial.println("Wrtiting \"" + data + "\" in file (" + fileName + ") with mode" + mode);
   SPIFFS.begin();
-  fs::File regFile = SPIFFS.open("register.txt", "w");
-  regFile.print(id);
-  regFile.close();
+  fs::File file = SPIFFS.open(fileName, mode);
+  file.print(data);
+  file.close();
   SPIFFS.end();
 }
 
-String getID() {
-  Serial.println("Getting device ID");
-  String id;
+String readFromFile(String fileName) {
+  Serial.println("Reading from: " + fileName);
+  String dataFromFile;
   SPIFFS.begin();
-  fs::File regFile = SPIFFS.open("register.txt", "r");
-  id = readlnSPIFFS(regFile);
-  regFile.close();
+  fs::File file = SPIFFS.open(fileName, "r");
+  dataFromFile = readlnSPIFFS(file);
+  file.close();
   SPIFFS.end();
-  return id;
+  Serial.print("The result is: ");
+  Serial.println(dataFromFile);
+  return dataFromFile;
 }
 
-/*void setTime() {
+// Set time from time servers
+void setTimeOnline() {
   Serial.println("Setting time");
-  SPIFFS.begin();
-  if(!SPIFFS.exists("time.txt")) {
-    configTime(3 * 3600, 0, "pool.ntp.org", "time.nist.gov");
-    Serial.println("\nWaiting for time");
-    while (!time(nullptr)) {
-      Serial.print(".");
-      delay(1000);
-      time_t now = time(nullptr);
-      Serial.println(ctime(&now));
-    }
-  } else {  
-  fs::File regFile = SPIFFS.open("register.txt", "w");
-  regFile.print(id);
-  regFile.close();
-  }
-  SPIFFS.end();
+  configTime(timezone * 3600, 0, "pool.ntp.org", "time.nist.gov");
+  time_t now;
+  Serial.println("\nWaiting for time");
+  do {
+    Serial.print(".");
+    delay(1000);
+    now = time(nullptr);
+    Serial.println(ctime(&now));
+  } while (!time(nullptr));
+  writeInFile("time.txt", String(now), "w");
 }
 
-String getTime() {
-  Serial.println("Getting device ID");
-  String id;
-  SPIFFS.begin();
-  fs::File regFile = SPIFFS.open("register.txt", "r");
-  id = readlnSPIFFS(regFile);
-  regFile.close();
-  SPIFFS.end();
-  return id;
-}*/
+// Set time if Wi-Fi is not connected(causes unaccuracy)
+void setTimeOffline(int used) {
+  uint32 currentTime = getTime();
+  if(used == 1) {
+    currentTime += sleeptime/MICROSEC;
+  } else {
+    currentTime += millis()/MILLISEC;
+  }
+  writeInFile("time.txt", (String)currentTime, "w");
+}
 
-String getKey() {
-  Serial.println("Trying to read key from SD");
-  if(SD.begin(SDCARD_PIN)) {
-    File keyFile = SD.open("key.txt", FILE_WRITE);
-    String key = readlnSD(keyFile);
-    keyFile.close();
-    return key;
-  } 
-  return "";
+// Read seconds value during last launch from "time.txt"
+uint32 getTime() {
+  Serial.println("Getting time");
+  String time;
+  uint32 time_int;
+  time = readFromFile("time.txt");
+  time_int = (uint32)time.toInt();
+  return time_int;
+}
+
+String generateTimestamp(time_t now) {
+  struct tm* tmnow = localtime(&now);
+  String time = String(tmnow->tm_year + 1900) + "-" + String(tmnow->tm_mon + 1) + "-" + String(tmnow->tm_mday) + "T" + String(tmnow->tm_hour) + 
+    ":" + String(tmnow->tm_min) + ":" + String(tmnow->tm_sec) + "+00:00";
+  return time;
 }
 
 boolean sendDataToServer(String data) {
@@ -187,8 +264,10 @@ boolean sendDataToServer(String data) {
   HTTPClient http;
   int waitTime = 5000;
   int waited = 0;
+  String dataHost = "http://" + readFromFile("ip.txt") + dataHostTail;
 
   Serial.println("[HTTP] Connecting to server...");
+  Serial.println("URL is: " + dataHost);
 
   if(http.begin(dataHost)) {
     Serial.println("Connected.");
@@ -210,7 +289,13 @@ boolean sendDataToServer(String data) {
   Serial.println(returnCode);
 
   if (returnCode == HTTP_OK) {
-    sleeptime = http.getString().toInt();
+    String timeSleep = http.getString();
+    Serial.println(timeSleep);
+    timeSleep.replace('"', ' ');
+    timeSleep.trim();
+    sleeptime = timeSleep.toInt();
+    Serial.println(timeSleep);
+    Serial.println(sleeptime);
     Serial.println("Data sent");
     return true;
   }
@@ -238,10 +323,12 @@ boolean sendOldDataToServer() {
   if(SPIFFS.begin()) {
     fs::File savedData = SPIFFS.open("data.txt", "r");
     if(savedData) {
-      while(savedData.available()) {
+      int eof = savedData.available();
+      while(eof > 0) {
         dataBulk = dataBulk + readlnSPIFFS(savedData);
-        if(savedData.available()) {
-          dataBulk = dataBulk + ',';
+        eof = savedData.available();
+        if(eof > 0) {
+          dataBulk = dataBulk + ",";
         }
       }
     }
@@ -341,10 +428,9 @@ void formatData(){
 
 // Read line from file from InMemory
 String readlnSPIFFS(fs::File file) {
-  Serial.println("reading line from SPIFFS");
   String res = "";
   char curr = ' ';
-  while(curr != '\0' and file.available()) {
+  while(curr != '}' and file.available()) {
     curr = file.read();
     res += curr;
   }
@@ -362,16 +448,21 @@ String readlnSD(File file) {
   return res;
 }
 
+String readlnSerial() {
+  String res = "";
+  char curr = ' ';
+  while(Serial.available() > 0) {
+    curr = Serial.read();
+    if(curr != '\n')
+      res += curr;
+  }  
+  return res;
+}
+
 String generateData(String temp, String CO2, String humid, String battery) {
-  /*
-   * Errors:
-   *  0: No errors;
-   *  1: Wi-Fi is not available
-   *  2: Have no connection with server
-   *  3: SD Card is broken or is not available
-   *  4: Cannot write the file on the SD Card
-   */
-  String data = "{\"timestamp\": \"2018-07-08T04:50:23+00:00\", \"device\": \"" + getID() + "\", \"charge\": \"" + battery +"\", \"temp\": \"" + 
+  String timestamp = generateTimestamp(getTime());
+  String id = readFromFile("register.txt");
+  String data = "{\"timestamp\": \"" + timestamp + "\", \"device\": \"" + id + "\", \"charge\": \"" + battery +"\", \"temp\": \"" + 
   temp + "\", \"humid\": \"" + humid + "\"}";
   return data;
 }
@@ -397,13 +488,19 @@ void setup() {
   Serial.begin(115200);
   delay(10);
   Serial.println("Start working");
-  Serial.println(millis());
 
   // Variables to keep necessary data
   String temp = "";
   String CO2 = "";
   String humid = "";
   String battery = "";
+
+  // Handling the serial commands
+  Serial.println("Waiting for serial command");
+  serialCommands();
+
+  ssid = stringToChar(readFromFile("wifi_ssid.txt"));
+  password = stringToChar(readFromFile("wifi_password.txt"));
 
   // Variables to keep state of board
   boolean wifiConnected = false;
@@ -414,7 +511,7 @@ void setup() {
   // Initialize connection to wi-fi network
   wifiConnected = wifiConnect();
   yield();
-
+  
   // Check, is it first time launch of box and register it on server
   // and get in response its ID and sleep time
   tryToRegister();
@@ -425,6 +522,12 @@ void setup() {
   humid = getHumid();
   battery = getBatteryLevel();
 
+  // Setting time firstly to create data with correct values
+  if(wifiConnected) {
+    setTimeOnline();
+  } else {
+    setTimeOffline(1);
+  }
   // Connect with server and send data
   String data = generateData(temp, CO2, humid, battery);
   Serial.println(data);
@@ -452,10 +555,19 @@ void setup() {
     Serial.println(analogRead(A0));
     delay(100);
   }
+
+  // Setting time secondly to save time value more accuracy
+  if(wifiConnected) {
+    setTimeOnline();
+  } else {
+    setTimeOffline(2);
+  }
   Serial.println("Ended");
-  ESP.deepSleep(5000000);
+  Serial.println(sleeptime);
+  ESP.deepSleep(sleeptime);
 
 }
 
 void loop() {
 }
+
