@@ -31,7 +31,7 @@ String regHostTail  = "/api/devices/";
 const char* ssid = "Innopolis";
 const char* password = "Innopolis";
 
-int sleeptime = 5000000;
+int sleeptime = 300000;
 int timezone = 3;
 
 // DHT sensor object
@@ -88,7 +88,7 @@ void tryToRegister() {
 
     http.begin(regHost); 
     http.addHeader("Content-Type", "application/json");
-    String regData = "{\"key\": \"" + key + "\", \"MAC\": \"" + macAdd + "\", \"charge\": \"90\"}"; 
+    String regData = "{\"key\": \"" + key + "\", \"MAC\": \"" + macAdd + "\", \"charge\": \"" + getBatteryLevel() + "\"}"; 
     Serial.println(regData);
     int httpCode = http.POST(regData);
     Serial.println(httpCode);
@@ -255,7 +255,7 @@ uint32 getTime() {
 String generateTimestamp(time_t now) {
   struct tm* tmnow = localtime(&now);
   String time = String(tmnow->tm_year + 1900) + "-" + String(tmnow->tm_mon + 1) + "-" + String(tmnow->tm_mday) + "T" + String(tmnow->tm_hour) + 
-    ":" + String(tmnow->tm_min) + ":" + String(tmnow->tm_sec) + "+00:00";
+    ":" + String(tmnow->tm_min) + ":" + String(tmnow->tm_sec);
   return time;
 }
 
@@ -459,11 +459,25 @@ String readlnSerial() {
   return res;
 }
 
-String generateData(String temp, String CO2, String humid, String battery) {
+String generateData(String temp, String CO2, String humid, String battery, String mode) {
   String timestamp = generateTimestamp(getTime());
   String id = readFromFile("register.txt");
-  String data = "{\"timestamp\": \"" + timestamp + "\", \"device\": \"" + id + "\", \"charge\": \"" + battery +"\", \"temp\": \"" + 
-  temp + "\", \"humid\": \"" + humid + "\"}";
+  String data;
+  if(temp.equals("nan")) {
+   if(mode == "online") {
+      data = "{\"device\": \"" + id + "\", \"charge\": \"" + battery +"\"}";
+    } else {
+      data = "{\"timestamp\": \"" + timestamp + "\", \"device\": \"" + id + "\", \"charge\": \"" + battery +"\"}";
+    }
+  } else {
+    if(mode == "online") {
+      data = "{\"device\": \"" + id + "\", \"charge\": \"" + battery +"\", \"temp\": \"" + 
+      temp + "\", \"humid\": \"" + humid + "\"}";
+    } else {
+      data = "{\"timestamp\": \"" + timestamp + "\", \"device\": \"" + id + "\", \"charge\": \"" + battery +"\", \"temp\": \"" + 
+      temp + "\", \"humid\": \"" + humid + "\"}";
+    } 
+  }
   return data;
 }
 
@@ -481,7 +495,11 @@ String getHumid() {
 
 String getBatteryLevel() {
 
-  return "100";
+  float humid = dht.readHumidity();
+  if(((String)humid).equals("nan")) {
+    return "0.1";
+  }
+  return "0.9";
 }
 
 void setup() {
@@ -529,7 +547,7 @@ void setup() {
     setTimeOffline(1);
   }
   // Connect with server and send data
-  String data = generateData(temp, CO2, humid, battery);
+  String data = generateData(temp, CO2, humid, battery, "online");
   Serial.println(data);
   if (wifiConnected) {
     if(dataWasSaved) {
@@ -545,15 +563,12 @@ void setup() {
   }
 
   if (!wifiConnected or !serverConnected) {
+    data = generateData(temp, CO2, humid, battery, "offline");
     sdStatus = saveDataToSDCard(data);
     if(sdStatus > 2) {
       saveDataToInternalMemory(data);
     }
     dataSaved();
-  }
-  for(int i = 0; i < 10; i++) {
-    Serial.println(analogRead(A0));
-    delay(100);
   }
 
   // Setting time secondly to save time value more accuracy
@@ -563,6 +578,7 @@ void setup() {
     setTimeOffline(2);
   }
   Serial.println("Ended");
+  sleeptime = sleeptime * 1000;
   Serial.println(sleeptime);
   ESP.deepSleep(sleeptime);
 
@@ -570,4 +586,3 @@ void setup() {
 
 void loop() {
 }
-
